@@ -52,21 +52,24 @@ def _rois_near_cn(stat, cn_px, max_px=10):
         if np.hypot(cx - cn_px[0], cy - cn_px[1]) < max_px:
             near.append(i)
     return np.array(near, dtype=int)
-def main(folder, index=None):
+def main(folder, index=None, mouse=None, session=None):
     """
     Main function to process data. Handles optional index for specific photostim subfolder.
 
     Parameters:
         folder (str): Path to the folder containing data.
         index (int or None): Index for the photostim subfolder (e.g., 2 for photostim2). Defaults to None.
-        bci_folder_name (str): Folder name for the BCI dataset (e.g., 'suite2p_BCI' or 'suite2p_ch1').
+        mouse (str or None): Override for animal/subject ID. If None, parsed from `folder` path
+            (which assumes a local layout like /.../<mouse>/<session>/pophys/). Pass explicitly
+            when the folder doesn't follow that convention (e.g., a CO capsule workspace).
+        session (str or None): Override for session date / ID. Same fallback behavior as `mouse`.
 
     Returns:
         dict: Processed data dictionary.
     """
-    
-    data = dict()    
-    slash_indices = [match.start() for match in re.finditer('/', folder)]        
+
+    data = dict()
+    slash_indices = [match.start() for match in re.finditer('/', folder)]
     if 'pophys' in folder:
         # Newer folder structure with 'pophys' at the end
         data['session'] = folder[slash_indices[-3]+1 : slash_indices[-2]]
@@ -75,6 +78,11 @@ def main(folder, index=None):
         # Older structure, no 'pophys'
         data['session'] = folder[slash_indices[-2]+1 : slash_indices[-1]]
         data['mouse'] = folder[slash_indices[-3]+1 : slash_indices[-2]]
+    # Explicit overrides win — useful when folder is e.g. /scratch/session/pophys/
+    if mouse is not None:
+        data['mouse'] = str(mouse)
+    if session is not None:
+        data['session'] = str(session)
     bci_folder = os.path.join(folder, 'suite2p_BCI', 'plane0')
     
     if os.path.isdir(bci_folder):
@@ -106,7 +114,7 @@ def main(folder, index=None):
         stat   = stat[cells]
         
         data['dat_file'] = bci_folder
-        slash_indices = [match.start() for match in re.finditer('/', folder)]        
+        slash_indices = [match.start() for match in re.finditer('/', folder)]
         if 'pophys' in folder:
             # Newer folder structure with 'pophys' at the end
             data['session'] = folder[slash_indices[-3]+1 : slash_indices[-2]]
@@ -115,6 +123,11 @@ def main(folder, index=None):
             # Older structure, no 'pophys'
             data['session'] = folder[slash_indices[-2]+1 : slash_indices[-1]]
             data['mouse'] = folder[slash_indices[-3]+1 : slash_indices[-2]]
+        # Re-apply explicit overrides (these win over path parsing).
+        if mouse is not None:
+            data['mouse'] = str(mouse)
+        if session is not None:
+            data['session'] = str(session)
 
         
         dt_si = 1 / float(siHeader['metadata']['hRoiManager']['scanVolumeRate'])
