@@ -18,4 +18,5 @@ RUN pip3 install -U --no-cache-dir \
     h5py \
     matplotlib \
     scanimage-tiff-reader \
-    tifffile
+    tifffile \
+    opencv-python-headless
