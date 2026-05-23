@@ -9,7 +9,7 @@ COPY git-askpass /
 
 RUN ["apt-get", "update"]
 RUN ["apt-get", "install", "-y", "vim"]
-
+RUN curl -fsSL https://code-server.dev/install.sh | sh
 RUN pip3 install -U --no-cache-dir \
     numpy \
     scipy \
