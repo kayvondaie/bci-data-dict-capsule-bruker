@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -ex
+
+# This is the master script for the capsule. When you click "Reproducible Run",
+# the code in this file will execute.
+#
+# TODO: wire this to your actual analysis. For now it just imports the modules
+# to confirm the environment is set up correctly. Replace with a call to
+# data_dict_create_module_bruker / bonsai_npy_threshold_calculator that
+# reads from /data/<asset>/ and writes to /results/.
+
+python -u <<'PY'
+import sys
+print("Python:", sys.version)
+import data_dict_create_module_bruker
+import bonsai_npy_threshold_calculator
+import extract_scanimage_metadata
+import folder_props_fun
+print("All modules imported successfully.")
+print("Modules:")
+print("  data_dict_create_module_bruker:", data_dict_create_module_bruker.__file__)
+print("  bonsai_npy_threshold_calculator:", bonsai_npy_threshold_calculator.__file__)
+print("  extract_scanimage_metadata:", extract_scanimage_metadata.__file__)
+print("  folder_props_fun:", folder_props_fun.__file__)
+PY
