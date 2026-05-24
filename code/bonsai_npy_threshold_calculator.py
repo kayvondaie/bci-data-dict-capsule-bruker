@@ -1,15 +1,19 @@
 """
 Bonsai version of Bpod_npy_threshold_calculator2.py
 Computes threshold crossing times, hit rates, and CN activity from data dict.
-Requires: data, folder (from ddc.main)
-"""
-import sys
-sys.path.insert(0, r'C:\Users\kayvon.daie\Documents\claude_code\bonsai')
 
+Usage:
+    from bonsai_npy_threshold_calculator import run
+    figs = run(folder, data)   # data from ddc.main(folder)
+
+Returns a list of matplotlib Figure objects (for saving or inspecting).
+"""
+import os
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
-import os, json
+
 
 def _draw_switch_ticks(switches, frac=0.05):
     """Vertical tick marks at threshold-switch trials, sized to the bottom
@@ -22,90 +26,108 @@ def _draw_switch_ticks(switches, frac=0.05):
     ax.set_ylim(ylo, yhi)
 
 
-ops = np.load(folder + r'/suite2p_BCI/plane0/ops.npy', allow_pickle=True).tolist()
-siHeader = np.load(folder + r'/suite2p_BCI/plane0/siHeader.npy', allow_pickle=True).tolist()
-len_files = ops['frames_per_file']
-cn_ind = data['cn_csv_index'][0]
+def run(folder, data):
+    """Compute threshold crossings, hit rates, CN activity, and produce plots.
 
-# Threshold crossing time relative to trial start
-rt = np.array([x[0] if len(x) > 0 else np.nan for x in data['threshold_crossing_time']])
-st = np.array([x[0] if len(x) > 0 else np.nan for x in data['SI_start_times']])
-rt = rt - st
+    Parameters
+    ----------
+    folder : str
+        Path to the session directory (containing suite2p_BCI/plane0/).
+    data : dict
+        Output of data_dict_create_module_bruker.main(folder).
 
-rew = ~np.isnan(rt)
+    Returns
+    -------
+    list of matplotlib.figure.Figure
+        [main_6panel_figure, epoch_analysis_figure]
+    """
+    ops = np.load(folder + r'/suite2p_BCI/plane0/ops.npy', allow_pickle=True).tolist()
+    siHeader = np.load(folder + r'/suite2p_BCI/plane0/siHeader.npy', allow_pickle=True).tolist()
+    len_files = ops['frames_per_file']
+    cn_ind = data['cn_csv_index'][0]
 
-# ROI CSV processing
-roi = np.copy(data['roi_csv'])
-frm_ind = np.arange(1, int(np.max(roi[:, 1])) + 1)
+    # Threshold crossing time relative to trial start
+    rt = np.array([x[0] if len(x) > 0 else np.nan for x in data['threshold_crossing_time']])
+    st = np.array([x[0] if len(x) > 0 else np.nan for x in data['SI_start_times']])
+    rt = rt - st
 
-inds = np.where(np.diff(roi[:,1]) < 0)[0]
-for i in range(len(inds)):
-    ind = inds[i]
-    roi[ind+1:, 1] = roi[ind+1:, 1] + roi[ind, 1]
-    roi[ind+1:, 0] = roi[ind+1:, 0] + roi[ind, 0]
+    rew = ~np.isnan(rt)
 
-interp_func = interp1d(roi[:, 1], roi, axis=0, kind='linear', fill_value='extrapolate')
-roi_interp = interp_func(frm_ind)
+    # ROI CSV processing
+    roi = np.copy(data['roi_csv'])
+    frm_ind = np.arange(1, int(np.max(roi[:, 1])) + 1)
 
-# --- Load thresholds ---
-# Try .mat files first (same as bpod version), fall back to Bonsai Trial.json
-BCI_thresholds = data.get('BCI_thresholds', None)
+    inds = np.where(np.diff(roi[:, 1]) < 0)[0]
+    for i in range(len(inds)):
+        ind = inds[i]
+        roi[ind + 1:, 1] = roi[ind + 1:, 1] + roi[ind, 1]
+        roi[ind + 1:, 0] = roi[ind + 1:, 0] + roi[ind, 0]
 
-if BCI_thresholds is None or np.all(np.isnan(BCI_thresholds)):
-    # Extract thresholds from Bonsai Trial.json
-    parent = os.path.dirname(folder.rstrip('/\\'))
-    trial_json = os.path.join(parent, 'behavior', 'SoftwareEvents', 'Trial.json')
-    bonsai_thresholds = []
-    if os.path.isfile(trial_json):
-        with open(trial_json, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                ev = json.loads(line)
-                rp = ev['data']['response_period']['action']
-                lo = rp['lower_action_threshold']
-                if isinstance(lo, dict):
-                    lo = lo['distribution_parameters']['value']
-                hi = rp['upper_action_threshold']
-                if isinstance(hi, dict):
-                    hi = hi['distribution_parameters']['value']
-                bonsai_thresholds.append([lo, hi])
-        bonsai_thresholds = np.array(bonsai_thresholds).T  # shape (2, n_bonsai_trials)
-        # Need to align to matched trials - use same alignment as create_bonsai_info
-        # For now, assume data already has the right number of trials
-        n = min(bonsai_thresholds.shape[1], len(rew))
-        BCI_thresholds = np.full((2, len(rew)), np.nan)
-        BCI_thresholds[:, :n] = bonsai_thresholds[:, :n]
-    else:
-        BCI_thresholds = np.full((2, len(rew)), np.nan)
-        print('WARNING: no BCI_thresholds found')
+    interp_func = interp1d(roi[:, 1], roi, axis=0, kind='linear', fill_value='extrapolate')
+    roi_interp = interp_func(frm_ind)
 
-# If a lower-threshold change occurs in the first 10 trials, drop everything
-# before that change (applied only to the bottom-row plots below).
-_k_lower = np.diff(BCI_thresholds[0, :])
-_early_lower = np.where((_k_lower != 0) & (~np.isnan(_k_lower)))[0]
-_early_lower = _early_lower[_early_lower < 10]
-trim_start = int(_early_lower[-1] + 1) if len(_early_lower) > 0 else 0
+    # --- Load thresholds ---
+    # Try .mat files first (same as bpod version), fall back to Bonsai Trial.json
+    BCI_thresholds = data.get('BCI_thresholds', None)
 
-# Voltage mapping function
-fun = lambda x: np.minimum(
-    (x > BCI_thresholds[0, 0]) * ((x - BCI_thresholds[0, 0]) / (BCI_thresholds[1, 0] - BCI_thresholds[0, 0])) * 3.3,
-    3.3
-)
+    if BCI_thresholds is None or np.all(np.isnan(BCI_thresholds)):
+        # Extract thresholds from Bonsai Trial.json
+        parent = os.path.dirname(folder.rstrip('/\\'))
+        trial_json = os.path.join(parent, 'behavior', 'SoftwareEvents', 'Trial.json')
+        bonsai_thresholds = []
+        if os.path.isfile(trial_json):
+            with open(trial_json, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    ev = json.loads(line)
+                    rp = ev['data']['response_period']['action']
+                    lo = rp['lower_action_threshold']
+                    if isinstance(lo, dict):
+                        lo = lo['distribution_parameters']['value']
+                    hi = rp['upper_action_threshold']
+                    if isinstance(hi, dict):
+                        hi = hi['distribution_parameters']['value']
+                    bonsai_thresholds.append([lo, hi])
+            bonsai_thresholds = np.array(bonsai_thresholds).T  # shape (2, n_bonsai_trials)
+            # Need to align to matched trials - use same alignment as create_bonsai_info
+            # For now, assume data already has the right number of trials
+            n = min(bonsai_thresholds.shape[1], len(rew))
+            BCI_thresholds = np.full((2, len(rew)), np.nan)
+            BCI_thresholds[:, :n] = bonsai_thresholds[:, :n]
+        else:
+            BCI_thresholds = np.full((2, len(rew)), np.nan)
+            print('WARNING: no BCI_thresholds found')
 
-# Initialize
-strt = 0
-dt_si = np.median(np.diff(roi[:, 0]))
-fcn = np.empty((350, len(len_files) - 1))
-FCN = np.empty((350, len(len_files) - 1))
-t_si = np.empty((350, len(len_files) - 1))
+    # If a lower-threshold change occurs in the first 10 trials, drop everything
+    # before that change (applied only to the bottom-row plots below).
+    _k_lower = np.diff(BCI_thresholds[0, :])
+    _early_lower = np.where((_k_lower != 0) & (~np.isnan(_k_lower)))[0]
+    _early_lower = _early_lower[_early_lower < 10]
+    trim_start = int(_early_lower[-1] + 1) if len(_early_lower) > 0 else 0
 
-# Find threshold switches
-ind = np.where(~np.isnan(BCI_thresholds[0, :]))[0]
-if len(ind) == 0:
-    print('No valid thresholds found')
-else:
+    # Voltage mapping function
+    fun = lambda x: np.minimum(
+        (x > BCI_thresholds[0, 0]) * ((x - BCI_thresholds[0, 0]) / (BCI_thresholds[1, 0] - BCI_thresholds[0, 0])) * 3.3,
+        3.3
+    )
+
+    # Initialize
+    strt = 0
+    dt_si = np.median(np.diff(roi[:, 0]))
+    fcn = np.empty((350, len(len_files) - 1))
+    FCN = np.empty((350, len(len_files) - 1))
+    t_si = np.empty((350, len(len_files) - 1))
+
+    figs = []
+
+    # Find threshold switches
+    ind = np.where(~np.isnan(BCI_thresholds[0, :]))[0]
+    if len(ind) == 0:
+        print('No valid thresholds found')
+        return figs
+
     k = np.diff(BCI_thresholds[1, :])
     switchesu = np.where((k != 0) & (~np.isnan(k)))[0]
     k = np.diff(BCI_thresholds[0, :])
@@ -159,6 +181,7 @@ else:
 
     # --- Plotting ---
     fig = plt.figure(figsize=(6, 4))
+    figs.append(fig)
     plt.rcParams['font.family'] = 'Arial'
     plt.rcParams['font.size'] = 8
 
@@ -253,7 +276,8 @@ else:
     plt.tight_layout()
 
     # --- Epoch analysis ---
-    fig = plt.figure(figsize=(5, 2.5))
+    fig2 = plt.figure(figsize=(5, 2.5))
+    figs.append(fig2)
     rt_epoch = np.zeros((50, len(switches)))
     tuning_epoch = np.zeros((50, len(switches)))
     tuning = np.nanmean(ff[60:, :], axis=0)
@@ -283,10 +307,23 @@ else:
     plt.subplot(121)
     plt.plot(x, np.nanmean(rt_epoch, axis=1), 'k.-')
     plt.xlabel('Trials since Thr change')
-    plt.ylabel('$\Delta$ Time to reward (s)')
+    plt.ylabel('$\\Delta$ Time to reward (s)')
 
     plt.subplot(122)
     plt.plot(x, np.nanmean(tuning_epoch, axis=1), 'k.-')
     plt.xlabel('Trials since Thr change')
-    plt.ylabel('$\Delta$ CN Tuning')
+    plt.ylabel('$\\Delta$ CN Tuning')
     plt.tight_layout()
+
+    return figs
+
+
+if __name__ == "__main__":
+    # CLI usage: python bonsai_npy_threshold_calculator.py /path/to/session
+    # data must already exist (e.g., from a prior ddc.main run); for now just
+    # an error message so it's clear what's needed.
+    import sys
+    if len(sys.argv) > 1:
+        print("ERROR: this module must be imported and called with run(folder, data).")
+        print("       data should come from data_dict_create_module_bruker.main(folder).")
+        sys.exit(1)
