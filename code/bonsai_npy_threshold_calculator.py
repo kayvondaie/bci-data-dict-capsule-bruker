@@ -184,6 +184,7 @@ def run(folder, data):
     figs.append(fig)
     plt.rcParams['font.family'] = 'Arial'
     plt.rcParams['font.size'] = 8
+    fig.suptitle(f"{data.get('mouse', '?')}  {data.get('session', '?')}", fontsize=10)
 
     plt.subplot(231)
     epochs = np.concatenate((switches, [len(rew)]))
@@ -273,7 +274,7 @@ def run(folder, data):
     plt.legend(['Real', 'expected'])
     plt.xlabel('Epoch')
     plt.ylabel('Time to reward (s)')
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # leave room for the suptitle
 
     # --- Epoch analysis ---
     fig2 = plt.figure(figsize=(5, 2.5))
