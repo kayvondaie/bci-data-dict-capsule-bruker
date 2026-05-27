@@ -31,8 +31,8 @@ import numpy as np
 from pathlib import Path
 
 # ====== FILL THESE IN ======
-SUBJECT = "824946"
-DATE = "2026-05-19"
+SUBJECT = "850381"
+DATE = "2026-05-26"
 TARGET_STEM = "bci2"   # which epoch to extract for analysis (bci / bci2 / spont_pre / ...)
 # ===========================
 
