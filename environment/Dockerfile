@@ -1,4 +1,4 @@
-# hash:sha256:5da9d34550758dff915b0847bc6c97b86944f412132345dabdeeeb45f71a3f7e
+# hash:sha256:a6fc5eafe3e48904aa46ebba013dcfcda1bfc5f2abbc52b0972045cf313a9318
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
 
@@ -8,15 +8,19 @@ COPY git-ask-pass /
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        vim \
+        vim=2:8.1.2269-1ubuntu5.32 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install -U --no-cache-dir \
-    h5py \
-    matplotlib \
-    numpy \
-    opencv-python-headless \
-    pandas \
-    scanimage-tiff-reader \
-    scipy \
-    tifffile
+    h5py==3.14.0 \
+    matplotlib==3.9.4 \
+    numpy==2.0.2 \
+    opencv-python-headless==4.13.0.92 \
+    pandas==2.3.3 \
+    scanimage-tiff-reader==1.4.1.4 \
+    scipy==1.13.1 \
+    tifffile==2024.8.30
+
+COPY postInstall /
+RUN --mount=type=secret,id=secrets . /run/secrets/secrets \
+    && /postInstall

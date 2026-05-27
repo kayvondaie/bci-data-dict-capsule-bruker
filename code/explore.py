@@ -3,6 +3,7 @@ import os, json, subprocess
 import numpy as np
 from pathlib import Path
 import sys
+
 sys.path.insert(0, "/code")
 
 import extract_scanimage_metadata
