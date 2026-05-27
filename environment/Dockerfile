@@ -1,23 +1,22 @@
-FROM registry.codeocean.allenneuraldynamics.org/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
+# hash:sha256:5da9d34550758dff915b0847bc6c97b86944f412132345dabdeeeb45f71a3f7e
+ARG REGISTRY_HOST
+FROM $REGISTRY_HOST/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ENV CAPSULE_VERSION="0.1.0"
 ARG GIT_ASKPASS
-ARG GIT_ACCESS_TOKEN
-COPY git-askpass /
+COPY git-ask-pass /
 
-RUN ["apt-get", "update"]
-RUN ["apt-get", "install", "-y", "vim"]
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        vim \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://code-server.dev/install.sh | sh
-
-RUN pip3 install -U --no-cache-dir \
-    numpy \
-    scipy \
-    pandas \
+RUN pip install -U --no-cache-dir \
     h5py \
     matplotlib \
+    numpy \
+    opencv-python-headless \
+    pandas \
     scanimage-tiff-reader \
-    tifffile \
-    opencv-python-headless
-    
+    scipy \
+    tifffile
