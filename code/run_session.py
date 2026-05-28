@@ -26,7 +26,6 @@ matplotlib.use("Agg")
 
 import json
 import os
-import pickle
 import re
 import subprocess
 import sys
@@ -183,11 +182,9 @@ target_tifs = sorted(
 frames_per_file = [trial_locations[n][1] - trial_locations[n][0] + 1 for n in target_tifs]
 print(f"{len(target_tifs)} TIFFs in {TARGET_STEM} epoch ({sum(frames_per_file)} frames)")
 
-for tname in target_tifs:
-    src = raw / "pophys" / tname
-    if src.is_file():
-        (POPHYS / tname).symlink_to(src)
-
+# No need to symlink TIFFs — nothing reads them from the workspace.
+# siHeader is extracted directly from the raw asset below.
+# Sidecar files (csv, mat) ARE used by ddc.main, so symlink those.
 for f in (raw / "pophys").iterdir():
     if f.is_file() and f.suffix != ".tif" and f.name.startswith(f"{TARGET_STEM}_"):
         tgt = POPHYS / f.name
@@ -216,7 +213,8 @@ ops = np.load(ops_path, allow_pickle=True).tolist()
 ops["frames_per_file"] = frames_per_file
 np.save(bci_dir / "ops.npy", ops)
 
-first_tif = sorted(POPHYS.glob(f"{TARGET_STEM}_*.tif"))[0]
+# Read siHeader directly from the raw asset.
+first_tif = raw / "pophys" / target_tifs[0]
 siHeader = extract_scanimage_metadata.extract_scanimage_metadata(str(first_tif))
 siHeader["siBase"] = {0: TARGET_STEM, 1: "", 2: "spont_pre"}
 siHeader["savefolders"] = {0: TARGET_STEM, 1: "spont", 2: "spont_post", 3: "spont_pre", 4: "spont_post"}
@@ -270,10 +268,15 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Save outputs
 # ---------------------------------------------------------------------------
-dict_path = RESULTS / "data_dict.pkl"
-with open(dict_path, "wb") as f:
-    pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-print(f"\nWrote {dict_path}")
+# Copy ddc.main's HDF5 output (cross-language readable) to /results/.
+import shutil
+h5_candidates = list(POPHYS.glob("data_main_*_BCI.h5"))
+if h5_candidates:
+    h5_out = RESULTS / "data_dict.h5"
+    shutil.copy(h5_candidates[0], h5_out)
+    print(f"\nWrote {h5_out}")
+else:
+    print(f"\nWARNING: no data_main_*_BCI.h5 found in {POPHYS}")
 
 for i, fig in enumerate(figs):
     out = FIGURES_DIR / f"{TARGET_STEM}_fig_{i:02d}.png"

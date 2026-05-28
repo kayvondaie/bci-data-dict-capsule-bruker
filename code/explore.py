@@ -11,7 +11,7 @@ To process only a subset, edit `TARGETS` in CELL 2 to a hand-picked list.
 """
 
 # %% CELL 1 — Imports + helper for processing one session
-import os, json, subprocess, re, sys, logging, pickle, traceback
+import os, json, subprocess, re, sys, logging, traceback, shutil
 import numpy as np
 from pathlib import Path
 
@@ -105,11 +105,9 @@ def process_session(subject: str, date: str, target_stem: str):
     frames_per_file = [trial_locations[n][1] - trial_locations[n][0] + 1 for n in target_tifs]
     print(f"  {len(target_tifs)} TIFFs ({sum(frames_per_file)} frames)")
 
-    for tname in target_tifs:
-        src = raw / "pophys" / tname
-        if src.is_file():
-            (pophys / tname).symlink_to(src)
-
+    # No need to symlink TIFFs — nothing in ddc.main / bonsai reads them
+    # from the workspace. We extract siHeader directly from the raw asset.
+    # Sidecar files (csv, mat) ARE used by ddc.main, so symlink those.
     for f in (raw / "pophys").iterdir():
         if f.is_file() and f.suffix != ".tif" and f.name.startswith(f"{target_stem}_"):
             tgt = pophys / f.name
@@ -136,7 +134,8 @@ def process_session(subject: str, date: str, target_stem: str):
     ops["frames_per_file"] = frames_per_file
     np.save(bci_dir / "ops.npy", ops)
 
-    first_tif = sorted(pophys.glob(f"{target_stem}_*.tif"))[0]
+    # Read siHeader directly from the raw asset — no need to symlink the TIFF.
+    first_tif = raw / "pophys" / target_tifs[0]
     siHeader = extract_scanimage_metadata.extract_scanimage_metadata(str(first_tif))
     siHeader["siBase"] = {0: target_stem, 1: "", 2: "spont_pre"}
     siHeader["savefolders"] = {0: target_stem, 1: "spont", 2: "spont_post", 3: "spont_pre", 4: "spont_post"}
@@ -173,9 +172,15 @@ def process_session(subject: str, date: str, target_stem: str):
         print(f"  bonsai failed: {e}")
         figs = []
 
-    # Save outputs
-    with open(results / "data_dict.pkl", "wb") as f:
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    # Copy ddc.main's HDF5 output (cross-language readable) to results.
+    # ddc names it data_main_<slugified-folder>_BCI.h5; glob for it.
+    import shutil
+    h5_candidates = list(pophys.glob("data_main_*_BCI.h5"))
+    if h5_candidates:
+        shutil.copy(h5_candidates[0], results / "data_dict.h5")
+    else:
+        print(f"  WARNING: no data_main_*_BCI.h5 found in {pophys}")
+
     for i, fig in enumerate(figs):
         fig.savefig(figures_dir / f"{target_stem}_fig_{i:02d}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
