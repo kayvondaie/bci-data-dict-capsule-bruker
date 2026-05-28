@@ -1,50 +1,35 @@
-# %% CELL 1 — Imports and paths
-import os, json, subprocess
+# %% CELL 1 — Config, imports, asset discovery, workspace build
+import os, json, subprocess, re, sys, logging
 import numpy as np
 from pathlib import Path
-import sys
 
 sys.path.insert(0, "/code")
-
 import extract_scanimage_metadata
 import data_dict_create_module_bruker
 ddc = data_dict_create_module_bruker
 
 %matplotlib inline
-import logging
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-# Adjust if you ever switch sessions:
-RAW_ASSET_NAME = "single-plane-ophys_824946_2026-05-19_16-49-45"
-WORKSPACE = Path("/scratch/session")
-
-raw = Path("/data") / RAW_ASSET_NAME
-proc = next(p for p in Path("/data").iterdir() if "_processed_" in p.name)
-extraction = proc / "extraction"
-mc = proc / "motion_correction"
-
-print(f"raw:        {raw}")
-print(f"processed:  {proc}")
-print(f"workspace:  {WORKSPACE}")
-#%%
-# %% CELL 2 — Specify SUBJECT + DATE, find assets, build workspace
-import os, json, subprocess, re
-import numpy as np
-from pathlib import Path
 
 # ====== FILL THESE IN ======
-SUBJECT = "850381"
+SUBJECT = "850378"
 DATE = "2026-05-26"
-TARGET_STEM = "bci2"   # which epoch to extract for analysis (bci / bci2 / spont_pre / ...)
+TARGET_STEM = "bci"   # which epoch to extract (bci / bci2 / spont_pre / ...)
 # ===========================
 
 WORKSPACE = Path("/scratch/session")
 POPHYS = WORKSPACE / "pophys"
 
-# --- Step 1: Find raw asset ---
+# --- Find raw asset ---
 asset_prefix = f"single-plane-ophys_{SUBJECT}_{DATE}_"
 attached = sorted(Path("/data").iterdir())
 raws = [p for p in attached if p.name.startswith(asset_prefix) and "_processed_" not in p.name]
-procs = [p for p in attached if p.name.startswith(asset_prefix) and "_processed_" in p.name]
+# Accept manually-named processed assets that don't follow the auto-capture
+# convention (e.g. "850378_2026-05-26_11-35-43" missing _processed_).
+procs = [
+    p for p in attached
+    if p not in raws and SUBJECT in p.name and DATE in p.name
+]
 
 if not raws:
     raise RuntimeError(
@@ -59,11 +44,9 @@ if len(raws) > 1:
     )
 raw = raws[0]
 
-# --- Step 2: Find processed asset; if multiple, pick the most recent ---
 if not procs:
     raise RuntimeError(
         f"No PROCESSED asset attached matching subject={SUBJECT} date={DATE}.\n"
-        f"Expected something starting with: {asset_prefix} and containing '_processed_'\n"
         f"Currently attached:\n  " + "\n  ".join(p.name for p in attached)
     )
 
@@ -79,7 +62,7 @@ if len(procs_sorted) > 1:
     for older in procs_sorted[1:]:
         print(f"  ignored: {older.name}")
 
-# --- Step 3: Detect nested folder (newer assets) vs flat (older assets) ---
+# Detect nested folder (newer assets) vs flat (older assets)
 if (proc / "extraction").is_dir():
     proc_root = proc
 else:
@@ -94,12 +77,12 @@ else:
 extraction = proc_root / "extraction"
 mc = proc_root / "motion_correction"
 
-print(f"\nraw:        {raw.name}")
+print(f"raw:        {raw.name}")
 print(f"processed:  {proc.name}")
 print(f"  data at:  {proc_root}")
 print(f"target:     epoch '{TARGET_STEM}'")
 
-# --- Step 4: Validate target epoch exists in processed output ---
+# --- Validate target epoch ---
 with open(mc / "epoch_locations.json") as f:
     epoch_locations = json.load(f)
 with open(mc / "trial_locations.json") as f:
@@ -108,22 +91,18 @@ with open(mc / "trial_locations.json") as f:
 if TARGET_STEM not in epoch_locations:
     raise RuntimeError(
         f"Epoch {TARGET_STEM!r} not in this processed asset's epoch_locations.\n"
-        f"Available epochs: {list(epoch_locations)}\n"
-        f"If you wanted a different epoch, change TARGET_STEM. If you wanted bci/bci2 "
-        f"separated but only see 'bci', the pipeline likely ran on an older stitcher "
-        f"version that merged them — re-run the pipeline."
+        f"Available: {list(epoch_locations)}"
     )
 
 target_start, target_end = epoch_locations[TARGET_STEM]
 target_n_frames = target_end - target_start + 1
-print(f"\nepoch_locations[{TARGET_STEM!r}] = [{target_start}, {target_end}]  ({target_n_frames} frames)")
+print(f"epoch_locations[{TARGET_STEM!r}] = [{target_start}, {target_end}]  ({target_n_frames} frames)")
 
-# --- Step 5: Build workspace ---
+# --- Build workspace ---
 subprocess.run(["rm", "-rf", str(WORKSPACE)], check=False)
 POPHYS.mkdir(parents=True)
 (WORKSPACE / "behavior").symlink_to(raw / "behavior")
 
-# Filter trial_locations to TIFFs that belong to the target epoch (by name + frame range)
 target_tifs = sorted(
     name for name, (s, e) in trial_locations.items()
     if name.startswith(f"{TARGET_STEM}_") and s >= target_start and e <= target_end
@@ -131,20 +110,17 @@ target_tifs = sorted(
 frames_per_file = [trial_locations[n][1] - trial_locations[n][0] + 1 for n in target_tifs]
 print(f"{len(target_tifs)} TIFFs in {TARGET_STEM} epoch ({sum(frames_per_file)} frames)")
 
-# Symlink raw TIFFs for target epoch
 for tname in target_tifs:
     src = raw / "pophys" / tname
     if src.is_file():
         (POPHYS / tname).symlink_to(src)
 
-# Symlink stem-matching sidecar files (csv, mat, stim)
 for f in (raw / "pophys").iterdir():
     if f.is_file() and f.suffix != ".tif" and f.name.startswith(f"{TARGET_STEM}_"):
         tgt = POPHYS / f.name
         if not tgt.exists():
             tgt.symlink_to(f)
 
-# Build suite2p_BCI/plane0
 bci_dir = POPHYS / "suite2p_BCI" / "plane0"
 bci_dir.mkdir(parents=True)
 frame_slice = slice(target_start, target_end + 1)
@@ -166,15 +142,12 @@ ops = np.load(ops_path, allow_pickle=True).tolist()
 ops["frames_per_file"] = frames_per_file
 np.save(bci_dir / "ops.npy", ops)
 
-# siHeader from a TIFF in the target epoch
-import extract_scanimage_metadata
 first_tif = sorted(POPHYS.glob(f"{TARGET_STEM}_*.tif"))[0]
 siHeader = extract_scanimage_metadata.extract_scanimage_metadata(str(first_tif))
 siHeader["siBase"] = {0: TARGET_STEM, 1: "", 2: "spont_pre"}
 siHeader["savefolders"] = {0: TARGET_STEM, 1: "spont", 2: "spont_post", 3: "spont_pre", 4: "spont_post"}
 np.save(bci_dir / "siHeader.npy", siHeader)
 
-# Optional spont_pre/plane0 if available
 if "spont_pre" in epoch_locations:
     s_start, s_end = epoch_locations["spont_pre"]
     spont_dir = POPHYS / "suite2p_spont_pre" / "plane0"
@@ -191,7 +164,9 @@ if "spont_pre" in epoch_locations:
             (spont_dir / fname).symlink_to(src)
 
 print(f"\n✓ Workspace ready at {WORKSPACE}")
-# %% CELL 3 — Run ddc.main with pophys as folder
+
+
+# %% CELL 2 — Run ddc.main with the workspace as folder
 import importlib
 importlib.reload(data_dict_create_module_bruker)
 ddc = data_dict_create_module_bruker
@@ -199,8 +174,8 @@ ddc = data_dict_create_module_bruker
 folder = str(POPHYS) + "/"
 print(f"Calling ddc.main(folder={folder!r}) ...")
 data = ddc.main(folder)
+
 # Override mouse/session — ddc parses them from path, which is useless for our workspace
-import re
 m = re.match(r"single-plane-ophys_(\d+)_(\d{4}-\d{2}-\d{2})_", raw.name)
 if m:
     data["mouse"] = m.group(1)
@@ -217,7 +192,9 @@ for k in data:
     else:
         s = repr(v)
         print(f"  {k}: {type(v).__name__} = {s[:80]}{'...' if len(s) > 80 else ''}")
-# %% CELL 4 — Run bonsai threshold analysis
+
+
+# %% CELL 3 — Run bonsai threshold analysis
 import importlib
 import bonsai_npy_threshold_calculator
 importlib.reload(bonsai_npy_threshold_calculator)
@@ -226,5 +203,4 @@ figs = bonsai_npy_threshold_calculator.run(folder, data)
 print(f"Generated {len(figs)} figures.")
 import matplotlib.pyplot as plt
 plt.show()
-
 # %%
