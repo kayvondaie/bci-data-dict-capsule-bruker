@@ -12,8 +12,8 @@ ddc = data_dict_create_module_bruker
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
 # ====== FILL THESE IN ======
-SUBJECT = "850378"
-DATE = "2026-05-26"
+SUBJECT = "820614"
+DATE = "2026-05-28"
 TARGET_STEM = "bci"   # which epoch to extract (bci / bci2 / spont_pre / ...)
 # ===========================
 
