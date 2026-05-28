@@ -3,12 +3,20 @@ set -ex
 
 # Entry point for Reproducible Runs of this capsule.
 #
-# Reads SUBJECT, DATE, TARGET_STEM from environment variables (typically
-# set by the bci_analysis orchestrator capsule's run_capsule API call).
+# Reads SUBJECT, DATE, TARGET_STEM from environment variables OR (when
+# triggered as a Reproducible Run) from positional args $1 $2 $3.
+#
 # Produces /results/data_dict.pkl + /results/figures/*.png.
 #
-# To launch interactively from a workstation:
+# Manual launch from a workstation:
 #   SUBJECT=850378 DATE=2026-05-26 TARGET_STEM=bci bash /code/run
+#
+# Orchestrator-triggered (positional from RunParams.parameters):
+#   bash /code/run 850378 2026-05-26 bci
+
+export SUBJECT="${SUBJECT:-$1}"
+export DATE="${DATE:-$2}"
+export TARGET_STEM="${TARGET_STEM:-${3:-bci}}"
 
 cd /code
 python -u run_session.py
