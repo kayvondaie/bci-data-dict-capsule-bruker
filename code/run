@@ -1,22 +1,52 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 
 # Entry point for Reproducible Runs of this capsule.
 #
-# Reads SUBJECT, DATE, TARGET_STEM from environment variables OR (when
-# triggered as a Reproducible Run) from positional args $1 $2 $3.
+# Modes:
+#   Single session (env vars):
+#     SUBJECT=850378 DATE=2026-05-27 TARGET_STEM=bci bash /code/run
 #
-# Produces /results/data_dict.pkl + /results/figures/*.png.
+#   Single session (positional args from orchestrator):
+#     bash /code/run 850378 2026-05-27 bci
 #
-# Manual launch from a workstation:
-#   SUBJECT=850378 DATE=2026-05-26 TARGET_STEM=bci bash /code/run
+#   Batch (recommended for many sessions in one container — mounts assets
+#   once instead of once per session):
+#     SESSIONS="850378:2026-05-27,824468:2026-05-27:bci2" bash /code/run
 #
-# Orchestrator-triggered (positional from RunParams.parameters):
-#   bash /code/run 850378 2026-05-26 bci
+# Outputs land in /results/<subject>_<date>_<stem>/ (one subdir per session).
 
-export SUBJECT="${SUBJECT:-$1}"
-export DATE="${DATE:-$2}"
-export TARGET_STEM="${TARGET_STEM:-${3:-bci}}"
-
-cd /code
-python -u run_session.py
+if [ -n "${SESSIONS}" ]; then
+    # Batch mode: loop over comma-separated entries.
+    echo "[code/run] Batch mode: SESSIONS=${SESSIONS}"
+    IFS=',' read -ra SESS_ARRAY <<< "${SESSIONS}"
+    FAILED=()
+    for entry in "${SESS_ARRAY[@]}"; do
+        # Strip whitespace
+        entry="$(echo "$entry" | xargs)"
+        [ -z "$entry" ] && continue
+        IFS=':' read -ra PARTS <<< "$entry"
+        export SUBJECT="${PARTS[0]}"
+        export DATE="${PARTS[1]}"
+        export TARGET_STEM="${PARTS[2]:-bci}"
+        echo ""
+        echo "======================================================================"
+        echo "[code/run] Processing  $SUBJECT $DATE $TARGET_STEM"
+        echo "======================================================================"
+        if ! python -u /code/run_session.py; then
+            echo "[code/run] FAIL on $SUBJECT $DATE $TARGET_STEM"
+            FAILED+=("$entry")
+        fi
+    done
+    echo ""
+    echo "[code/run] Batch done. Failed: ${#FAILED[@]} / ${#SESS_ARRAY[@]}"
+    if [ ${#FAILED[@]} -gt 0 ]; then
+        printf '  %s\n' "${FAILED[@]}"
+    fi
+else
+    # Single-session mode (env vars or positional args).
+    export SUBJECT="${SUBJECT:-$1}"
+    export DATE="${DATE:-$2}"
+    export TARGET_STEM="${TARGET_STEM:-${3:-bci}}"
+    python -u /code/run_session.py
+fi

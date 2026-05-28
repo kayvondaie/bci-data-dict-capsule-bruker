@@ -68,11 +68,15 @@ print(f"  DATE        = {DATE}")
 print(f"  TARGET_STEM = {TARGET_STEM}")
 print("=" * 70)
 
-WORKSPACE = Path("/scratch/session")
+# Per-session subfolders so multiple invocations in one container don't
+# collide. The captured CO asset will contain N subfolders, one per
+# processed session.
+SESSION_TAG = f"{SUBJECT}_{DATE}_{TARGET_STEM}"
+WORKSPACE = Path(f"/scratch/{SESSION_TAG}")
 POPHYS = WORKSPACE / "pophys"
-RESULTS = Path("/results")
+RESULTS = Path("/results") / SESSION_TAG
 FIGURES_DIR = RESULTS / "figures"
-RESULTS.mkdir(exist_ok=True)
+RESULTS.mkdir(parents=True, exist_ok=True)
 FIGURES_DIR.mkdir(exist_ok=True)
 
 
