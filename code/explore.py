@@ -61,13 +61,17 @@ def find_pair_in_data(subject: str, date: str):
 
 def process_session(subject: str, date: str, target_stem: str):
     """Build workspace + run ddc + run bonsai for one session.
-    Saves to /results/<subject>_<date>_<stem>/. Returns the path to outputs."""
+
+    Outputs flat at /results/:
+      /results/<subject>_<date>_<stem>.h5
+      /results/figures/<subject>_<date>_<stem>_fig_NN.png
+    """
     session_tag = f"{subject}_{date}_{target_stem}"
     workspace = Path(f"/scratch/{session_tag}")
     pophys = workspace / "pophys"
-    results = Path("/results") / session_tag
-    figures_dir = results / "figures"
-    results.mkdir(parents=True, exist_ok=True)
+    results_root = Path("/results")
+    figures_dir = results_root / "figures"
+    results_root.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(exist_ok=True)
 
     raw, proc, proc_root = find_pair_in_data(subject, date)
@@ -172,24 +176,22 @@ def process_session(subject: str, date: str, target_stem: str):
         print(f"  bonsai failed: {e}")
         figs = []
 
-    # Copy ddc.main's HDF5 output (cross-language readable) to results.
-    # ddc names it data_main_<slugified-folder>_BCI.h5; glob for it.
-    import shutil
+    # Copy ddc.main's HDF5 output (cross-language readable) to /results/
+    # with a session-tagged filename.
     h5_candidates = list(pophys.glob("data_main_*_BCI.h5"))
+    h5_out = results_root / f"{session_tag}.h5"
     if h5_candidates:
-        shutil.copy(h5_candidates[0], results / "data_dict.h5")
+        shutil.copy(h5_candidates[0], h5_out)
     else:
         print(f"  WARNING: no data_main_*_BCI.h5 found in {pophys}")
 
+    # All figures share /results/figures/ with subject_date_stem-prefixed names.
     for i, fig in enumerate(figs):
-        fig.savefig(figures_dir / f"{target_stem}_fig_{i:02d}.png", dpi=150, bbox_inches="tight")
+        out = figures_dir / f"{session_tag}_fig_{i:02d}.png"
+        fig.savefig(out, dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    with open(results / "run_log.txt", "w") as f:
-        f.write(f"subject={subject}\ndate={date}\ntarget_stem={target_stem}\n")
-        f.write(f"raw={raw.name}\nproc={proc.name}\n")
-        f.write(f"n_figures={len(figs)}\n")
-    return results, len(figs)
+    return h5_out, len(figs)
 
 
 # %% CELL 2 — Discover all attached (raw, processed) pairs and pick TARGETS
@@ -280,17 +282,14 @@ INSPECT = TARGETS[0] if TARGETS else None
 if INSPECT:
     subject, date, stem = INSPECT
     session_tag = f"{subject}_{date}_{stem}"
-    fig_dir = Path("/results") / session_tag / "figures"
-    if fig_dir.is_dir():
+    fig_dir = Path("/results") / "figures"
+    pngs = sorted(fig_dir.glob(f"{session_tag}_fig_*.png"))
+    print(f"{session_tag}: {len(pngs)} figures in {fig_dir}")
+    for png in pngs:
         from matplotlib.image import imread
-        pngs = sorted(fig_dir.glob("*.png"))
-        print(f"{session_tag}: {len(pngs)} figures")
-        for png in pngs:
-            img = imread(str(png))
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.imshow(img)
-            ax.axis("off")
-            ax.set_title(png.name)
-            plt.show()
-    else:
-        print(f"No figures dir at {fig_dir}")
+        img = imread(str(png))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.imshow(img)
+        ax.axis("off")
+        ax.set_title(png.name)
+        plt.show()

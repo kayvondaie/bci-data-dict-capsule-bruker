@@ -67,15 +67,15 @@ print(f"  DATE        = {DATE}")
 print(f"  TARGET_STEM = {TARGET_STEM}")
 print("=" * 70)
 
-# Per-session subfolders so multiple invocations in one container don't
-# collide. The captured CO asset will contain N subfolders, one per
-# processed session.
+# Workspace stays per-session for isolation, but outputs land flat in
+# /results/ with session-tagged filenames so all sessions in a batch
+# share one figures/ folder.
 SESSION_TAG = f"{SUBJECT}_{DATE}_{TARGET_STEM}"
 WORKSPACE = Path(f"/scratch/{SESSION_TAG}")
 POPHYS = WORKSPACE / "pophys"
-RESULTS = Path("/results") / SESSION_TAG
-FIGURES_DIR = RESULTS / "figures"
-RESULTS.mkdir(parents=True, exist_ok=True)
+RESULTS_ROOT = Path("/results")
+FIGURES_DIR = RESULTS_ROOT / "figures"
+RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 FIGURES_DIR.mkdir(exist_ok=True)
 
 
@@ -268,30 +268,20 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Save outputs
 # ---------------------------------------------------------------------------
-# Copy ddc.main's HDF5 output (cross-language readable) to /results/.
+# Copy ddc.main's HDF5 output to /results/<session_tag>.h5
 import shutil
 h5_candidates = list(POPHYS.glob("data_main_*_BCI.h5"))
+h5_out = RESULTS_ROOT / f"{SESSION_TAG}.h5"
 if h5_candidates:
-    h5_out = RESULTS / "data_dict.h5"
     shutil.copy(h5_candidates[0], h5_out)
     print(f"\nWrote {h5_out}")
 else:
     print(f"\nWARNING: no data_main_*_BCI.h5 found in {POPHYS}")
 
 for i, fig in enumerate(figs):
-    out = FIGURES_DIR / f"{TARGET_STEM}_fig_{i:02d}.png"
+    out = FIGURES_DIR / f"{SESSION_TAG}_fig_{i:02d}.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Wrote {out}")
-
-log_path = RESULTS / "run_log.txt"
-with open(log_path, "w") as f:
-    f.write(f"subject:     {SUBJECT}\n")
-    f.write(f"date:        {DATE}\n")
-    f.write(f"target_stem: {TARGET_STEM}\n")
-    f.write(f"raw:         {raw.name}\n")
-    f.write(f"processed:   {proc.name}\n")
-    f.write(f"n_figures:   {len(figs)}\n")
-    f.write(f"data_dict_keys: {sorted(data.keys())}\n")
 
 print(f"\nDone.")
