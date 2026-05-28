@@ -1,25 +1,14 @@
 #!/usr/bin/env bash
 set -ex
 
-# This is the master script for the capsule. When you click "Reproducible Run",
-# the code in this file will execute.
+# Entry point for Reproducible Runs of this capsule.
 #
-# TODO: wire this to your actual analysis. For now it just imports the modules
-# to confirm the environment is set up correctly. Replace with a call to
-# data_dict_create_module_bruker / bonsai_npy_threshold_calculator that
-# reads from /data/<asset>/ and writes to /results/.
+# Reads SUBJECT, DATE, TARGET_STEM from environment variables (typically
+# set by the bci_analysis orchestrator capsule's run_capsule API call).
+# Produces /results/data_dict.pkl + /results/figures/*.png.
+#
+# To launch interactively from a workstation:
+#   SUBJECT=850378 DATE=2026-05-26 TARGET_STEM=bci bash /code/run
 
-python -u <<'PY'
-import sys
-print("Python:", sys.version)
-import data_dict_create_module_bruker
-import bonsai_npy_threshold_calculator
-import extract_scanimage_metadata
-import folder_props_fun
-print("All modules imported successfully.")
-print("Modules:")
-print("  data_dict_create_module_bruker:", data_dict_create_module_bruker.__file__)
-print("  bonsai_npy_threshold_calculator:", bonsai_npy_threshold_calculator.__file__)
-print("  extract_scanimage_metadata:", extract_scanimage_metadata.__file__)
-print("  folder_props_fun:", folder_props_fun.__file__)
-PY
+cd /code
+python -u run_session.py
