@@ -202,6 +202,98 @@ def process_session(subject: str, date: str, target_stem: str):
     return persistent_pngs_dir / f"{session_tag}_fig_00.png", saved
 
 
+# %% CELL 1.5 — Self-attach recent BCI sessions via CO API
+# Auto-attaches today's (and recent) sessions to THIS workstation so CELL 2
+# auto-discovery sees them. No need to visit the orchestrator capsule.
+#
+# Requires CODEOCEAN_TOKEN env var (set in the env editor — should already
+# be there from setup). Skips silently if missing.
+#
+# Set HOURS_BACK or skip this cell to control how far back to look.
+
+HOURS_BACK = 30
+
+_token = os.environ.get("CODEOCEAN_TOKEN")
+_capsule_id = os.environ.get("CO_CAPSULE_ID")
+if not _token or not _capsule_id:
+    print("Skipping self-attach — CODEOCEAN_TOKEN or CO_CAPSULE_ID not set.")
+else:
+    import time as _time
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from codeocean import CodeOcean as _CO
+    from codeocean.data_asset import DataAssetSearchParams as _SP
+    from codeocean.capsule import DataAssetAttachParams as _AP
+
+    _c = _CO(domain="https://codeocean.allenneuraldynamics.org", token=_token)
+
+    # Find my own running computation (this workstation)
+    _comps = _c.capsules.list_computations(capsule_id=_capsule_id)
+    _running = [x for x in _comps if str(getattr(x, "state", "")).lower().endswith("running")]
+    if not _running:
+        print("Skipping self-attach — no running computation found (am I in a workstation?).")
+    else:
+        _my_comp = _running[0].id
+        _cutoff = int((_dt.now(_tz.utc) - _td(hours=HOURS_BACK)).timestamp())
+
+        _sr = _c.data_assets.search_data_assets(_SP(
+            query="name:single-plane-ophys_8", limit=500,
+        ))
+        _raws = [a for a in _sr.results
+                 if a.name.startswith("single-plane-ophys_")
+                 and "_processed_" not in a.name
+                 and a.created >= _cutoff]
+        _procs = [a for a in _sr.results if "_processed_" in a.name]
+
+        # For each recent raw, find its matching processed (most recent if multiple)
+        _to_attach = []
+        _attached_now = {p.name for p in Path("/data").iterdir()}
+        for raw in _raws:
+            if raw.name in _attached_now:
+                continue
+            matching = [p for p in _procs if p.name.startswith(raw.name + "_processed_")]
+            if not matching:
+                continue
+            matching.sort(key=lambda p: p.created, reverse=True)
+            proc = matching[0]
+            if proc.name in _attached_now:
+                continue
+            _to_attach.append((raw, proc))
+
+        print(f"Found {len(_to_attach)} new session(s) from last {HOURS_BACK}h to attach:")
+        for raw, proc in _to_attach:
+            print(f"  {raw.name}")
+
+        if _to_attach:
+            _params = []
+            for raw, proc in _to_attach:
+                _params.append(_AP(id=raw.id, mount=raw.name))
+                _params.append(_AP(id=proc.id, mount=proc.name))
+            try:
+                _c.computations.attach_data_assets(
+                    computation_id=_my_comp, attach_params=_params,
+                )
+                print(f"\nLive-attached {len(_params)} assets. Waiting for /data/ to update...")
+                # Quick poll until everything shows up
+                expected = {raw.name for raw, _ in _to_attach} | {proc.name for _, proc in _to_attach}
+                for delay in [2, 4, 8, 15]:
+                    _time.sleep(delay)
+                    now = {p.name for p in Path("/data").iterdir()}
+                    missing = expected - now
+                    if not missing:
+                        print(f"  all mounted after {delay}s")
+                        break
+                    else:
+                        print(f"  after {delay}s: still missing {len(missing)}")
+                else:
+                    print(f"  WARNING: {len(missing)} mounts didn't appear: {sorted(missing)}")
+            except Exception as e:
+                _msg = str(e).lower()
+                if "already attached" in _msg:
+                    print(f"  Some assets already attached: {e}")
+                else:
+                    print(f"  Attach failed: {e}")
+
+
 # %% CELL 2 — Discover all attached (raw, processed) pairs and pick TARGETS
 # Edit TARGETS below to override the auto-discovered list (e.g. to process
 # just one session, or to set a non-default TARGET_STEM per session).
