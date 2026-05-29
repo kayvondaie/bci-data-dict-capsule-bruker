@@ -244,37 +244,39 @@ else:
                  and a.created >= _cutoff]
         _procs = [a for a in _sr.results if "_processed_" in a.name]
 
-        # For each recent raw, find its matching processed (most recent if multiple)
-        _to_attach = []
+        # For each recent raw, find its matching processed (most recent if multiple).
+        # Collect both raw + proc assets that need attaching independently — if
+        # the raw is already mounted but its processed isn't (or vice versa),
+        # we still attach the missing one. Otherwise CELL 2 silently drops the
+        # session because has_proc=False.
         _attached_now = {p.name for p in Path("/data").iterdir()}
+        _to_attach = []
+        _pairs_found = 0
         for raw in _raws:
-            if raw.name in _attached_now:
-                continue
             matching = [p for p in _procs if p.name.startswith(raw.name + "_processed_")]
             if not matching:
                 continue
             matching.sort(key=lambda p: p.created, reverse=True)
             proc = matching[0]
-            if proc.name in _attached_now:
-                continue
-            _to_attach.append((raw, proc))
+            _pairs_found += 1
+            if raw.name not in _attached_now:
+                _to_attach.append(raw)
+            if proc.name not in _attached_now:
+                _to_attach.append(proc)
 
-        print(f"Found {len(_to_attach)} new session(s) from last {HOURS_BACK}h to attach:")
-        for raw, proc in _to_attach:
-            print(f"  {raw.name}")
+        print(f"Found {_pairs_found} recent pair(s); {len(_to_attach)} asset(s) need attaching:")
+        for a in _to_attach:
+            print(f"  {a.name}")
 
         if _to_attach:
-            _params = []
-            for raw, proc in _to_attach:
-                _params.append(_AP(id=raw.id, mount=raw.name))
-                _params.append(_AP(id=proc.id, mount=proc.name))
+            _params = [_AP(id=a.id, mount=a.name) for a in _to_attach]
             try:
                 _c.computations.attach_data_assets(
                     computation_id=_my_comp, attach_params=_params,
                 )
                 print(f"\nLive-attached {len(_params)} assets. Waiting for /data/ to update...")
                 # Quick poll until everything shows up
-                expected = {raw.name for raw, _ in _to_attach} | {proc.name for _, proc in _to_attach}
+                expected = {a.name for a in _to_attach}
                 for delay in [2, 4, 8, 15]:
                     _time.sleep(delay)
                     now = {p.name for p in Path("/data").iterdir()}
