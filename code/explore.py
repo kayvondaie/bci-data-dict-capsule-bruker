@@ -62,17 +62,25 @@ def find_pair_in_data(subject: str, date: str):
 def process_session(subject: str, date: str, target_stem: str):
     """Build workspace + run ddc + run bonsai for one session.
 
-    Outputs flat at /results/:
-      /results/<subject>_<date>_<stem>.h5
-      /results/figures/<subject>_<date>_<stem>_fig_NN.png
+    Outputs:
+      /results/figures/<session_tag>_fig_00.png      (ephemeral; captured if
+                                                      you save results as asset)
+      /scratch/learning_pngs/<session_tag>_fig_00.png (persistent across
+                                                      workstation sessions on
+                                                      this capsule — used to
+                                                      skip already-processed
+                                                      sessions on rerun)
+    The ddc.main .h5 stays at /scratch/<session_tag>/pophys/data_main_*_BCI.h5
     """
     session_tag = f"{subject}_{date}_{target_stem}"
     workspace = Path(f"/scratch/{session_tag}")
     pophys = workspace / "pophys"
     results_root = Path("/results")
     figures_dir = results_root / "figures"
+    persistent_pngs_dir = Path("/scratch/learning_pngs")
     results_root.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(exist_ok=True)
+    persistent_pngs_dir.mkdir(exist_ok=True)
 
     raw, proc, proc_root = find_pair_in_data(subject, date)
     extraction = proc_root / "extraction"
@@ -179,17 +187,19 @@ def process_session(subject: str, date: str, target_stem: str):
     # H5 stays in /scratch/<session>/pophys/data_main_*_BCI.h5 (ddc.main
     # already wrote it there). Not copied to /results/.
 
-    # Only the first figure is informative — save fig 00 only.
+    # Only the first figure is informative — save fig 00 to both targets.
     saved = 0
     if figs:
-        out = figures_dir / f"{session_tag}_fig_00.png"
-        figs[0].savefig(out, dpi=150, bbox_inches="tight")
+        out_results = figures_dir / f"{session_tag}_fig_00.png"
+        out_persist = persistent_pngs_dir / f"{session_tag}_fig_00.png"
+        figs[0].savefig(out_results, dpi=150, bbox_inches="tight")
+        figs[0].savefig(out_persist, dpi=150, bbox_inches="tight")
         saved = 1
     # Close all (including any we didn't save) to free memory.
     for fig in figs:
         plt.close(fig)
 
-    return figures_dir / f"{session_tag}_fig_00.png", saved
+    return persistent_pngs_dir / f"{session_tag}_fig_00.png", saved
 
 
 # %% CELL 2 — Discover all attached (raw, processed) pairs and pick TARGETS
@@ -232,8 +242,10 @@ for sub, dt, stem in TARGETS:
     print(f"  {sub}  {dt}  stem={stem}")
 
 
-# %% CELL 3 — Process all TARGETS, save figures to /results/figures/
-# Skip sessions whose PNG already exists. Re-running this cell is idempotent.
+# %% CELL 3 — Process all TARGETS, save figures
+# Skip sessions whose PNG already exists in /scratch/learning_pngs/ (persistent
+# across workstation sessions on this capsule). Re-running this cell is
+# idempotent: previously-processed sessions are skipped.
 # Set FORCE = True to re-run sessions that already have a PNG.
 
 import time
@@ -245,16 +257,25 @@ skipped: list[dict] = []
 failed: list[dict] = []
 t0 = time.time()
 figures_dir = Path("/results") / "figures"
+persistent_pngs_dir = Path("/scratch/learning_pngs")
 figures_dir.mkdir(parents=True, exist_ok=True)
+persistent_pngs_dir.mkdir(parents=True, exist_ok=True)
 
 for subject, date, stem in TARGETS:
     session_tag = f"{subject}_{date}_{stem}"
-    expected_png = figures_dir / f"{session_tag}_fig_00.png"
+    persisted_png = persistent_pngs_dir / f"{session_tag}_fig_00.png"
 
-    if expected_png.exists() and not FORCE:
-        print(f"  SKIP  {subject}  {date}  {stem}  (PNG already exists)")
+    if persisted_png.exists() and not FORCE:
+        # Also mirror to /results/figures/ in case this is a fresh workstation
+        # and /results/ doesn't have it yet (so the saved-asset still includes
+        # historical sessions).
+        results_png = figures_dir / f"{session_tag}_fig_00.png"
+        if not results_png.exists():
+            import shutil
+            shutil.copy(persisted_png, results_png)
+        print(f"  SKIP  {subject}  {date}  {stem}  (PNG in /scratch/learning_pngs)")
         skipped.append({"subject": subject, "date": date, "stem": stem,
-                        "png": str(expected_png)})
+                        "png": str(persisted_png)})
         continue
 
     print(f"\n{'='*70}")
