@@ -11,7 +11,7 @@ To process only a subset, edit `TARGETS` in CELL 2 to a hand-picked list.
 """
 
 # %% CELL 1 — Imports + helper for processing one session
-import os, json, subprocess, re, sys, logging, traceback, shutil
+import os, json, subprocess, re, sys, logging, traceback
 import numpy as np
 from pathlib import Path
 
@@ -176,22 +176,20 @@ def process_session(subject: str, date: str, target_stem: str):
         print(f"  bonsai failed: {e}")
         figs = []
 
-    # Copy ddc.main's HDF5 output (cross-language readable) to /results/
-    # with a session-tagged filename.
-    h5_candidates = list(pophys.glob("data_main_*_BCI.h5"))
-    h5_out = results_root / f"{session_tag}.h5"
-    if h5_candidates:
-        shutil.copy(h5_candidates[0], h5_out)
-    else:
-        print(f"  WARNING: no data_main_*_BCI.h5 found in {pophys}")
+    # H5 stays in /scratch/<session>/pophys/data_main_*_BCI.h5 (ddc.main
+    # already wrote it there). Not copied to /results/.
 
-    # All figures share /results/figures/ with subject_date_stem-prefixed names.
-    for i, fig in enumerate(figs):
-        out = figures_dir / f"{session_tag}_fig_{i:02d}.png"
-        fig.savefig(out, dpi=150, bbox_inches="tight")
+    # Only the first figure is informative — save fig 00 only.
+    saved = 0
+    if figs:
+        out = figures_dir / f"{session_tag}_fig_00.png"
+        figs[0].savefig(out, dpi=150, bbox_inches="tight")
+        saved = 1
+    # Close all (including any we didn't save) to free memory.
+    for fig in figs:
         plt.close(fig)
 
-    return h5_out, len(figs)
+    return figures_dir / f"{session_tag}_fig_00.png", saved
 
 
 # %% CELL 2 — Discover all attached (raw, processed) pairs and pick TARGETS
@@ -234,25 +232,42 @@ for sub, dt, stem in TARGETS:
     print(f"  {sub}  {dt}  stem={stem}")
 
 
-# %% CELL 3 — Process all TARGETS, save to /results/<session>/
+# %% CELL 3 — Process all TARGETS, save figures to /results/figures/
+# Skip sessions whose PNG already exists. Re-running this cell is idempotent.
+# Set FORCE = True to re-run sessions that already have a PNG.
+
 import time
 
+FORCE = False
+
 completed: list[dict] = []
+skipped: list[dict] = []
 failed: list[dict] = []
 t0 = time.time()
+figures_dir = Path("/results") / "figures"
+figures_dir.mkdir(parents=True, exist_ok=True)
 
 for subject, date, stem in TARGETS:
+    session_tag = f"{subject}_{date}_{stem}"
+    expected_png = figures_dir / f"{session_tag}_fig_00.png"
+
+    if expected_png.exists() and not FORCE:
+        print(f"  SKIP  {subject}  {date}  {stem}  (PNG already exists)")
+        skipped.append({"subject": subject, "date": date, "stem": stem,
+                        "png": str(expected_png)})
+        continue
+
     print(f"\n{'='*70}")
     print(f"  {subject}  {date}  {stem}")
     print(f"{'='*70}")
     t_session = time.time()
     try:
-        results_dir, n_figs = process_session(subject, date, stem)
+        results_path, n_figs = process_session(subject, date, stem)
         dt = time.time() - t_session
         completed.append({"subject": subject, "date": date, "stem": stem,
-                          "n_figures": n_figs, "results": str(results_dir),
+                          "n_figures": n_figs, "png": str(results_path),
                           "elapsed_sec": round(dt, 1)})
-        print(f"  -> {results_dir}  ({n_figs} figs, {dt:.0f} sec)")
+        print(f"  -> {results_path}  ({n_figs} figs, {dt:.0f} sec)")
     except Exception as e:
         dt = time.time() - t_session
         failed.append({"subject": subject, "date": date, "stem": stem,
@@ -264,6 +279,7 @@ t_total = time.time() - t0
 print(f"\n{'='*70}")
 print(f"Done in {t_total:.0f} sec.")
 print(f"  completed: {len(completed)}")
+print(f"  skipped:   {len(skipped)}  (PNG already existed; set FORCE=True to re-run)")
 print(f"  failed:    {len(failed)}")
 print(f"{'='*70}")
 if failed:
@@ -273,7 +289,7 @@ if failed:
 
 # Save a batch summary alongside per-session outputs
 with open(Path("/results") / "batch_summary.json", "w") as f:
-    json.dump({"completed": completed, "failed": failed,
+    json.dump({"completed": completed, "skipped": skipped, "failed": failed,
                "total_sec": round(t_total, 1)}, f, indent=2)
 
 
