@@ -12,8 +12,9 @@ SAME units as BCI_thresholds (verified: CN mean ~767 straddles lower ~648).
 data['F']/df_closedloop are std-normalized dF/F (wrong scale for rectification).
 
 Window: fixed [go cue, go cue + W] on ALL trials (non-circular, no hit-selection).
-go cue time = trial_start[i] (verified == SI_start - SI_start[0], same clock as
-roi_csv col0). W default 3 s (≈ before the median crossing of ~4 s).
+Frame-accurate: roi_csv col 0 is IMAGING-FRAME time, not wall clock, so trials are
+sliced by cumsum(frames_per_file) on the gap-filled grid (M.frame_grid/seg_frames),
+NOT by trial_start time. W default 3 s (≈ before the median crossing of ~4 s).
 
 Per epoch we compute mean(CN), mean((CN-lower)_+), mean(drive); then the ratio
 later-epoch / first-epoch (the same baseline the expected-hit-rate null uses).
@@ -35,6 +36,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
+import cn_counterfactual_replay as M
 
 GROUPS = {
     "Ctrl":  ["820614", "824946", "820615", "855519"],
@@ -63,19 +65,23 @@ def load_session(path):
         cn_csv  = int(np.array(f["cn_csv_index"])[0])
         thr     = np.array(f["BCI_thresholds"])           # (2, ntrials)
         roi     = np.array(f["roi_csv"])                  # (nframes, ncols) continuous
-        ts      = np.array(f["trial_start"], dtype=float) # go-cue times (roi clock)
+        ts      = np.array(f["trial_start"], dtype=float) # go-cue times (WALL clock, not roi)
         tc      = _unpickle(f["threshold_crossing_time"][()])
         si      = _unpickle(f["SI_start_times"][()])
-    return dict(dt=dt, cn_csv=cn_csv, thr=thr, roi=roi, ts=ts, tc=tc, si=si)
+    fg = M.frame_grid(roi, cn_csv, path)   # frame-accurate windows (imaging clock)
+    roit_i, roicn_i, bnd = (fg[0], fg[1], fg[2]) if fg is not None else (None, None, None)
+    return dict(dt=dt, cn_csv=cn_csv, thr=thr, roi=roi, ts=ts, tc=tc, si=si,
+                roit_i=roit_i, roicn_i=roicn_i, bnd=bnd)
 
 
 def analyze_session(d, w_sec=W_SEC):
     thr   = d["thr"]
-    roit  = d["roi"][:, 0]                      # time (s), continuous
-    roicn = d["roi"][:, d["cn_csv"] + 2]        # CN readout, threshold units
+    roit_i = d["roit_i"]; roicn_i = d["roicn_i"]; bnd = d["bnd"]
     ts    = d["ts"]
     n     = thr.shape[1]
     n     = min(n, len(ts))
+    if bnd is None:
+        return None
 
     rt  = np.array([_first(d["tc"][i]) - _first(d["si"][i]) for i in range(n)])
     hit = (~np.isnan(rt)).astype(float)
@@ -104,11 +110,9 @@ def analyze_session(d, w_sec=W_SEC):
         lo = thr[0, i]; hi = thr[1, i]
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             continue
-        a = np.searchsorted(roit, ts[i])
-        b = np.searchsorted(roit, ts[i] + w_sec)
-        if b <= a:
+        seg = M.seg_frames(roit_i, roicn_i, bnd, i, w_sec)   # frame-accurate [go, go+W]
+        if seg is None or len(seg) < 1:
             continue
-        seg = roicn[a:b]
         mean_cn[i] = np.mean(seg)
         rect[i]    = np.mean(np.maximum(seg - lo, 0.0))
         drive[i]   = np.mean(np.clip((seg - lo) / (hi - lo), 0.0, 1.0))

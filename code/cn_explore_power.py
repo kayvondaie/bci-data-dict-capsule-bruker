@@ -28,9 +28,9 @@ W = 5.0
 
 def cf_drive_index(a, crit=CRIT, w=W):
     n = E.quit_point(a["rt"], crit)
-    if n < 20:
+    if n < 20 or a.get("bnd") is None:
         return None
-    thr = a["thr"]; ts = a["ts"]; roit = a["roit"]; roicn = a["roicn"]
+    thr = a["thr"]; roit_i = a["roit_i"]; roicn_i = a["roicn_i"]; bnd = a["bnd"]
     ku = np.diff(thr[1, :n])
     sw = np.concatenate(([0], np.where((ku != 0) & (~np.isnan(ku)))[0]))
     if len(sw) < 2:
@@ -41,10 +41,9 @@ def cf_drive_index(a, crit=CRIT, w=W):
     last_s = int(sw[-1])
     vals = []
     for i in range(last_s, n):
-        x = np.searchsorted(roit, ts[i]); y = np.searchsorted(roit, ts[i] + w)
-        if y - x < 3:
+        seg = M.seg_frames(roit_i, roicn_i, bnd, i, w)   # frame-accurate [go cue, go cue+w]
+        if seg is None or len(seg) < 3:
             continue
-        seg = roicn[x:y]
         vals.append(np.mean(np.maximum(seg - lower, 0.0) / (upper1 - lower)))
     return float(np.median(vals)) if vals else None
 

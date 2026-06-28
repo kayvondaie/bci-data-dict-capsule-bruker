@@ -21,7 +21,9 @@ Readouts per session:
   speedup    actual epoch-1 median TTR / cf_TTR   (within-session, unit-free)
 The within-session `speedup` cancels per-animal fluorescence scale.
 
-Signal: roi_csv[:, cn_csv+2] (threshold units). Window from go cue = trial_start[i].
+Signal: roi_csv[:, cn_csv+2] (threshold units). Per-trial windows are frame-accurate
+(cumsum(frames_per_file) on the gap-filled grid) — roi_csv col 0 is imaging-frame
+time, not wall clock, so trial_start cannot index it. See frame_grid()/seg_frames().
 Run:  python cn_counterfactual_replay.py
 """
 
@@ -37,6 +39,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
+from scipy.interpolate import interp1d
 
 GROUPS = {
     "Ctrl":  ["820614", "824946", "820615", "855519"],
@@ -82,6 +85,42 @@ def clipped_drive(seg, lo, hi):
     return np.clip((seg - lo) / (hi - lo), 0.0, 1.0)
 
 
+def frame_grid(roi, cn_csv, path):
+    """Frame-accurate per-trial windowing (see bonsai_npy_threshold_calculator).
+    roi_csv col 0 is IMAGING-FRAME time, NOT wall clock — so trial_start (wall
+    clock, includes ITIs) cannot index it. Restore DAQ frames dropped from roi_csv
+    by interpolating on frameNumber (col 1) onto the complete 1..max grid, then
+    slice each trial by cumsum(frames_per_file). Returns (roit_i, roicn_i, bnd, fpf)
+    or None if ops/frames_per_file is unavailable."""
+    opsp = os.path.join(os.path.dirname(path), "suite2p_BCI", "plane0", "ops.npy")
+    if not os.path.isfile(opsp):
+        return None
+    fpf = np.asarray(np.load(opsp, allow_pickle=True).tolist()["frames_per_file"])
+    roi2 = roi.astype(float).copy()
+    for r in np.where(np.diff(roi2[:, 1]) < 0)[0]:        # multi-file frameNumber resets
+        roi2[r + 1:, 1] += roi2[r, 1]
+        roi2[r + 1:, 0] += roi2[r, 0]
+    frm = np.arange(1, int(roi2[:, 1].max()) + 1)
+    roi_i = interp1d(roi2[:, 1], roi2, axis=0, kind="linear",
+                     fill_value="extrapolate")(frm)
+    bnd = np.concatenate(([0], np.cumsum(fpf))).astype(int)
+    return roi_i[:, 0], roi_i[:, cn_csv + 2], bnd, fpf
+
+
+def seg_frames(roit_i, roicn_i, bnd, i, t_end):
+    """CN of trial i (frames [bnd[i], bnd[i+1])) up to within-trial imaging time
+    t_end. Within a trial there are no acquisition gaps, so imaging time == wall
+    time and t_end can be rt/reward/MAX_T."""
+    if i + 1 >= len(bnd):
+        return None
+    ind = np.arange(bnd[i], min(bnd[i + 1], len(roicn_i)))
+    if len(ind) < 1:
+        return None
+    tw = roit_i[ind] - roit_i[ind[0]]
+    seg = roicn_i[ind][tw < t_end]
+    return seg if len(seg) > 0 else None
+
+
 def analyze(path):
     with h5py.File(path, "r") as f:
         thr    = np.array(f["BCI_thresholds"])
@@ -91,10 +130,14 @@ def analyze(path):
         tc     = _unpickle(f["threshold_crossing_time"][()])
         si     = _unpickle(f["SI_start_times"][()])
     roit  = roi[:, 0]
-    roicn = roi[:, cn_csv + 2]
     dtr   = float(np.median(np.diff(roit)))
     n     = min(thr.shape[1], len(ts))
     rt    = np.array([_first(tc[i]) - _first(si[i]) for i in range(n)])
+
+    fg = frame_grid(roi, cn_csv, path)       # frame-accurate windows (imaging clock)
+    if fg is None:
+        return None
+    roit_i, roicn_i, bnd, _fpf = fg
 
     ku = np.diff(thr[1, :n])
     sw = np.concatenate(([0], np.where((ku != 0) & (~np.isnan(ku)))[0]))
@@ -106,9 +149,7 @@ def analyze(path):
     last_s = int(sw[-1])                     # start of last epoch
 
     def seg_of(i, t_end):
-        a = np.searchsorted(roit, ts[i])
-        b = np.searchsorted(roit, ts[i] + t_end)
-        return roicn[a:b] if b > a else None
+        return seg_frames(roit_i, roicn_i, bnd, i, t_end)
 
     # ── estimate K' = clipped drive integral to crossing, over hit trials ──────
     Kp = []

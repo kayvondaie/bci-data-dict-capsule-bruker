@@ -12,9 +12,11 @@ Disengagement rule (low researcher DOF, tested at several criteria):
 Reuses loaders/helpers from cn_counterfactual_replay.
 """
 
+import os
 import numpy as np
 import h5py
 from collections import defaultdict
+from scipy.interpolate import interp1d
 import cn_counterfactual_replay as M
 
 B    = 20000
@@ -31,12 +33,24 @@ def load_arrays(path):
         ts     = np.array(f["trial_start"], dtype=float)
         tc     = M._unpickle(f["threshold_crossing_time"][()])
         si     = M._unpickle(f["SI_start_times"][()])
+        rw     = M._unpickle(f["reward_time"][()])
     roit  = roi[:, 0]
     roicn = roi[:, cn_csv + 2]
     dtr   = float(np.median(np.diff(roit)))
     n     = min(thr.shape[1], len(ts))
     rt    = np.array([M._first(tc[i]) - M._first(si[i]) for i in range(n)])
-    return dict(thr=thr, roit=roit, roicn=roicn, dtr=dtr, ts=ts, rt=rt, n=n)
+    # reward_time is ALREADY within-trial relative (= crossing + lick latency)
+    rwt   = np.array([M._first(rw[i]) for i in range(n)])
+
+    # Frame-accurate per-trial windowing (roi_csv col 0 is imaging-frame time, NOT
+    # wall clock) — see M.frame_grid / bonsai_npy_threshold_calculator.
+    fpf = roit_i = roicn_i = bnd = None
+    fg = M.frame_grid(roi, cn_csv, path)
+    if fg is not None:
+        roit_i, roicn_i, bnd, fpf = fg
+
+    return dict(thr=thr, roit=roit, roicn=roicn, dtr=dtr, ts=ts, rt=rt, rwt=rwt, n=n,
+                fpf=fpf, roit_i=roit_i, roicn_i=roicn_i, bnd=bnd)
 
 
 def quit_point(rt, crit):
@@ -57,8 +71,10 @@ def cf_ttr(a, crit):
     n = quit_point(a["rt"], crit)
     if n < 20:
         return None, 0
+    if a.get("bnd") is None:
+        return None, a["n"] - n               # need frames_per_file for frame-accurate windows
     thr = a["thr"]; rt = a["rt"][:n]
-    ts = a["ts"]; roit = a["roit"]; roicn = a["roicn"]; dtr = a["dtr"]
+    roit_i = a["roit_i"]; roicn_i = a["roicn_i"]; bnd = a["bnd"]; dtr = a["dtr"]
     ku = np.diff(thr[1, :n])
     sw = np.concatenate(([0], np.where((ku != 0) & (~np.isnan(ku)))[0]))
     if len(sw) < 2:
@@ -67,8 +83,7 @@ def cf_ttr(a, crit):
     last_s = int(sw[-1])
 
     def seg_of(i, t_end):
-        x = np.searchsorted(roit, ts[i]); y = np.searchsorted(roit, ts[i] + t_end)
-        return roicn[x:y] if y > x else None
+        return M.seg_frames(roit_i, roicn_i, bnd, i, t_end)
 
     Kp = []
     for i in range(n):

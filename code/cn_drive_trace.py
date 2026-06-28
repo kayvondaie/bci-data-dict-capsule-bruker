@@ -4,8 +4,10 @@
 Left panel  : hit_diff = MA(hit,10) - expected_rate            (behavior, as in
               bci_qc_summary_multigroup.ipynb Panel 1)
 Right panel : drive_diff = MA(d,10) - d_epoch1_baseline, where
-              d_i = mean_[go,go+W] (CN-lower)_+/(upper1-lower)  evaluated against
-              the FIXED epoch-1 threshold. Rises above 0 = CN drives the original
+              d_i = mean_[go,crossing] (CN-lower)_+/(upper1-lower)  evaluated against
+              the FIXED epoch-1 threshold (window runs from the go cue to that
+              trial's threshold crossing; misses use the ~10 s timeout).
+              Rises above 0 = CN drives the original
               bar harder than at the start (no-adaptation null = flat 0).
 
 Both pooled across sessions by trial index (mean +/- SEM), cut where < MIN_SESS
@@ -29,8 +31,12 @@ plt.rcParams.update({
 })
 B_BOOT = 10000
 
-W        = 5.0
+MISS_W   = 10.0  # window end for missed trials (no crossing): ~the trial timeout
 MA       = 10
+NGRID    = 100   # number of points on the fractional-progress grid (norm version)
+CRIT     = 0.5   # disengagement criterion for quit_point: trim each session at the
+                 # last trial whose 10-trial MA hit rate held >= CRIT (drops the
+                 # consistent end-of-session collapse from both trace and stat)
 MIN_SESS = 4
 DROP_FIRST = 1   # first trial is an anomalous high-drive "freebie" (~always a hit)
 BASE_N   = 20    # baseline = mean over first BASE_N trials (more stable than the
@@ -50,12 +56,21 @@ def mov(x, k):
     return num / np.where(den > 0, den, np.nan)
 
 
-def session_traces(a):
-    roit = a["roit"]; roicn = a["roicn"]
+def session_traces(a, end_src="cross", pad=0.0, hits_only=False):
+    """end_src: 'cross' → window ends at threshold crossing (rt); 'reward' → ends
+    at reward delivery (rwt = crossing + lick latency). pad (s) extends the window
+    past that endpoint on hit trials (still capped at the next trial start).
+    hits_only=True → drive computed on crossing trials only (misses → NaN), so
+    hit COUNT can't enter the metric. quit_point/engagement and behavioral
+    hit_diff always use rt regardless."""
+    if a.get("bnd") is None:
+        return None                           # need frames_per_file for frame-accurate windows
+    roit_i = a["roit_i"]; roicn_i = a["roicn_i"]; bnd = a["bnd"]
     # drop the anomalous first trial(s)
     thr = a["thr"][:, DROP_FIRST:]
     ts  = a["ts"][DROP_FIRST:]
     rt  = a["rt"][DROP_FIRST:]
+    endt = (a["rwt"] if end_src == "reward" else a["rt"])[DROP_FIRST:]
     n   = a["n"] - DROP_FIRST
     ku = np.diff(thr[1, :n])
     sw = np.concatenate(([0], np.where((ku != 0) & (~np.isnan(ku)))[0]))
@@ -76,12 +91,26 @@ def session_traces(a):
         exp[s:e] = float(np.nanmean(rt[0:fe] / al < 10))
     hit_diff = mov(hit, MA) - exp
 
-    # per-trial drive index vs FIXED epoch-1 threshold
+    # per-trial drive index vs FIXED epoch-1 threshold.
+    # Frame-accurate per trial (roi_csv col0 is imaging-frame time, NOT wall clock):
+    # slice trial i's frames by cumsum(frames_per_file) on the gap-filled grid,
+    # re-zero within-trial imaging time, and cut at the threshold crossing
+    # (end_src='cross') or reward (end_src='reward', + pad). Misses → ~10 s timeout.
     d = np.full(n, np.nan)
     for i in range(n):
-        x = np.searchsorted(roit, ts[i]); y = np.searchsorted(roit, ts[i] + W)
-        if y - x >= 3:
-            d[i] = np.mean(np.maximum(roicn[x:y] - lower, 0.0) / (upper1 - lower))
+        if hits_only and not np.isfinite(endt[i]):
+            continue                          # miss → leave d[i] = NaN
+        gi = i + DROP_FIRST                   # original trial index into bnd/frames
+        if gi + 1 >= len(bnd):
+            continue
+        ind = np.arange(bnd[gi], min(bnd[gi + 1], len(roicn_i)))
+        if len(ind) < 3:
+            continue
+        tw = roit_i[ind] - roit_i[ind[0]]     # within-trial imaging time (== wall, no ITI)
+        lim = (endt[i] + pad) if np.isfinite(endt[i]) else MISS_W
+        m = tw < lim
+        if m.sum() >= 3:
+            d[i] = np.mean(np.maximum(roicn_i[ind][m] - lower, 0.0) / (upper1 - lower))
     # baseline on the SMOOTHED series (epoch 1 ~11 trials ≈ MA window, so raw-vs-
     # smoothed mismatch otherwise offsets short epochs). Default window = first
     # BASE_N trials (more stable than the short epoch 1); fall back to epoch 1.
@@ -89,7 +118,20 @@ def session_traces(a):
     nb = min(BASE_N, n) if BASE_N else fe
     base = np.nanmean(sd[0:nb])
     drive_diff = sd - base
-    return hit_diff, drive_diff
+    return hit_diff, drive_diff, rt[:n]
+
+
+def to_progress(trace, ngrid=NGRID):
+    """Resample a per-session trace onto a common 0..1 fractional-progress grid
+    (NaN-aware). Each session then spans the full axis, so pooling weights every
+    session equally at every point regardless of its trial count."""
+    t = np.asarray(trace, float)
+    m = np.isfinite(t)
+    if m.sum() < 2:
+        return np.full(ngrid, np.nan)
+    xo = np.linspace(0.0, 1.0, len(t))
+    xg = np.linspace(0.0, 1.0, ngrid)
+    return np.interp(xg, xo[m], t[m])
 
 
 def pool(traces):
@@ -136,34 +178,25 @@ def flat_overall(valsC, valsL, rng):
             np.percentile(bd, 2.5), np.percentile(bd, 97.5), p)
 
 
-def main():
-    sess = M.discover()
-    print(f"Loading {len(sess)} sessions ...")
-    recs = {g: {"hit": [], "drv": []} for g in M.GROUPS}
-    for (sub, date), (nt, path) in sorted(sess.items()):
-        g = M.SUBJ2GROUP[sub]
-        try:
-            tr = session_traces(E.load_arrays(path))
-        except Exception:
-            tr = None
-        if tr is None:
-            continue
-        recs[g]["hit"].append(tr[0]); recs[g]["drv"].append(tr[1])
+def late_third(t):
+    t = np.asarray(t, float)
+    return np.nanmean(t[len(t) * 2 // 3:])    # summary = adapted (late) portion
 
-    def late_third(t):
-        t = np.asarray(t, float)
-        return np.nanmean(t[len(t) * 2 // 3:])    # summary = adapted (late) portion
 
+def make_figure(recs, out, norm):
+    """Build the two-panel figure. norm=True → x-axis is fractional session
+    progress (0-100%, each session resampled); norm=False → absolute trial #."""
     fig, axes = plt.subplots(1, 2, figsize=(3.5, 1.75))
     panels = [("hit", "Actual − expected hit rate", "hit_diff"),
               ("drv", "CN activity − baseline", "CN activity")]
     for ax, (key, title, ylab) in zip(axes, panels):
         ax.axhline(0, color="k", lw=0.6, ls="--", alpha=0.4)
-        cuts = {}
         for g in M.GROUPS:
             traces = recs[g][key]
             if not traces:
                 continue
+            if norm:
+                traces = [to_progress(t) for t in traces]
             mean, sem, n = pool(traces)
             cut = 0
             for i in range(len(n)):
@@ -171,8 +204,9 @@ def main():
                     cut = i
                 else:
                     break
-            cuts[g] = cut
             x = np.arange(cut + 1)
+            if norm:
+                x = x / (NGRID - 1) * 100.0
             ax.fill_between(x, (mean - sem)[:cut + 1], (mean + sem)[:cut + 1],
                             color=GC[g], alpha=0.15, lw=0)
             ax.plot(x, mean[:cut + 1], color=GC[g], lw=1.0,
@@ -185,12 +219,13 @@ def main():
         ax.text(0.03, 0.97, f"p = {p:.3f}", transform=ax.transAxes,
                 ha="left", va="top")
 
-        ax.set_xlabel("Trial #"); ax.set_ylabel(ylab); ax.set_title(title)
+        ax.set_xlabel("Session progress (%)" if norm else "Trial #")
+        ax.set_ylabel(ylab); ax.set_title(title)
         ax.margins(x=0.02)
         # legend in the empty upper-left zone (traces hug 0 there early), below p
-        leg = ax.legend(loc="upper left", bbox_to_anchor=(0.02, 0.88),
+        leg = ax.legend(loc="upper left", bbox_to_anchor=(0.02, 0.86),
                         handlelength=0, handletextpad=0, frameon=False,
-                        borderpad=0.1, labelspacing=0.2, fontsize=6)
+                        borderpad=0.1, labelspacing=0.2)
         for txt in leg.get_texts():                      # colored text, no line
             if txt.get_text().startswith("Ctrl"):
                 txt.set_color(GC["Ctrl"])
@@ -198,13 +233,49 @@ def main():
                 txt.set_color(GC["LC-KO"])
         ax.spines[["top", "right"]].set_visible(False)
 
-    out = "/results/figures/cn_drive_trace.png"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.tight_layout(pad=0.4, w_pad=0.8)
     fig.savefig(out, dpi=300)                 # no bbox_inches='tight' → exact 3.5×1.75 in
     fig.savefig(out.replace(".png", ".pdf"))  # vector copy
     w, h = fig.get_size_inches()
+    plt.close(fig)
     print(f"Saved → {out}  ({w}×{h} in)")
+
+
+# window-endpoint modes: (filename suffix, end_src, post-endpoint pad in s)
+MODES = [("",           "cross",  0.0),   # go cue → threshold crossing
+         ("_reward",    "reward", 0.0),   # go cue → reward delivery
+         ("_reward1s",  "reward", 1.0),   # go cue → reward + 1 s (GCaMP tail)
+         ("_reward2s",  "reward", 2.0)]   # go cue → reward + 2 s
+
+
+def main():
+    sess = M.discover()
+    print(f"Loading {len(sess)} sessions ...")
+    recs = {sfx: {g: {"hit": [], "drv": []} for g in M.GROUPS}
+            for sfx, _, _ in MODES}
+    for (sub, date), (nt, path) in sorted(sess.items()):
+        g = M.SUBJ2GROUP[sub]
+        try:
+            a = E.load_arrays(path)
+        except Exception:
+            continue
+        for sfx, src, pad in MODES:
+            try:
+                tr = session_traces(a, end_src=src, pad=pad)
+            except Exception:
+                tr = None
+            if tr is None:
+                continue
+            hit, drv, rt = tr
+            q = E.quit_point(rt, CRIT)        # trim end-of-session disengagement
+            recs[sfx][g]["hit"].append(hit[:q]); recs[sfx][g]["drv"].append(drv[:q])
+
+    # each mode × {absolute trial #, progress-normalized}
+    base = "/results/figures/cn_drive_trace"
+    for sfx, _, _ in MODES:
+        make_figure(recs[sfx], f"{base}{sfx}.png",          norm=False)
+        make_figure(recs[sfx], f"{base}{sfx}_progress.png", norm=True)
 
 
 if __name__ == "__main__":
