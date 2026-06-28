@@ -1,4 +1,4 @@
-# hash:sha256:afd50e7142a6b03cbe7d5bd1cd6f6c534498a08cbbd9cbe859a5abdd53562dfb
+# hash:sha256:724606b2b1c41449354f3a5253c53aeee9ffc6912299b94ba1d756a9cdab7a3a
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
 
@@ -16,6 +16,7 @@ RUN apt-get update \
 RUN pip install -U --no-cache-dir \
     codeocean==0.15.0 \
     h5py==3.14.0 \
+    jupyter==1.1.1 \
     matplotlib==3.9.4 \
     numpy==2.0.2 \
     opencv-python-headless==4.13.0.92 \

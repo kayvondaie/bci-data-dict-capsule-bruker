@@ -28,6 +28,10 @@
 					"version": "3.14.0"
 				},
 				{
+					"name": "jupyter",
+					"version": "1.1.1"
+				},
+				{
 					"name": "matplotlib",
 					"version": "3.9.4"
 				},
