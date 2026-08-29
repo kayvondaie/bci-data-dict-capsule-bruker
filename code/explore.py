@@ -59,8 +59,23 @@ def find_pair_in_data(subject: str, date: str):
     return raw, proc, proc_root
 
 
-def process_session(subject: str, date: str, target_stem: str):
+_CHAN_COLOR_MAP = {"chan1": "green", "chan2": "red"}
+
+
+def process_session(
+    subject: str,
+    date: str,
+    target_stem: str,
+    chan_override: str = None,
+    color: str = "",
+):
     """Build workspace + run ddc + run bonsai for one session.
+
+    For dual-channel processed assets (top-level `chan1/`, `chan2/` subdirs
+    from the dual-channel pipeline), this function recursively calls itself
+    once per channel with `chan_override` set. Each recursive call narrows
+    proc_root to that channel's subtree and suffixes session_tag with the
+    color name so the two runs don't collide.
 
     Outputs:
       /results/figures/<session_tag>_fig_00.png      (ephemeral; captured if
@@ -72,7 +87,28 @@ def process_session(subject: str, date: str, target_stem: str):
                                                       sessions on rerun)
     The ddc.main .h5 stays at /scratch/<session_tag>/pophys/data_main_*_BCI.h5
     """
-    session_tag = f"{subject}_{date}_{target_stem}"
+    # --- Dual-channel dispatch ---
+    if chan_override is None:
+        raw, proc_top, _ = find_pair_in_data(subject, date)
+        chan_subdirs = sorted(
+            p for p in proc_top.iterdir()
+            if p.is_dir() and re.match(r"^chan\d+$", p.name)
+        )
+        if chan_subdirs:
+            print(f"  dual-channel processed asset detected: "
+                  f"{[c.name for c in chan_subdirs]}; running per channel")
+            all_figs = []
+            for chan_dir in chan_subdirs:
+                chan_color = _CHAN_COLOR_MAP.get(chan_dir.name, chan_dir.name)
+                figs_chan = process_session(
+                    subject, date, target_stem,
+                    chan_override=chan_dir.name, color=chan_color,
+                )
+                all_figs.extend(figs_chan or [])
+            return all_figs
+
+    color_suffix = f"_{color}" if color else ""
+    session_tag = f"{subject}_{date}_{target_stem}{color_suffix}"
     workspace = Path(f"/scratch/{session_tag}")
     pophys = workspace / "pophys"
     results_root = Path("/results")
@@ -83,10 +119,24 @@ def process_session(subject: str, date: str, target_stem: str):
     persistent_pngs_dir.mkdir(exist_ok=True)
 
     raw, proc, proc_root = find_pair_in_data(subject, date)
+    # If invoked for a specific channel, narrow proc_root into that chan's subtree.
+    if chan_override is not None:
+        chan_root = proc / chan_override
+        if not chan_root.is_dir():
+            raise RuntimeError(f"chan_override={chan_override} not found under {proc}")
+        if (chan_root / "extraction").is_dir():
+            proc_root = chan_root
+        else:
+            candidates = [c for c in chan_root.iterdir()
+                          if c.is_dir() and (c / "extraction").is_dir()]
+            if not candidates:
+                raise RuntimeError(f"No extraction/ inside {chan_root}")
+            proc_root = candidates[0]
     extraction = proc_root / "extraction"
     mc = proc_root / "motion_correction"
     print(f"  raw:  {raw.name}")
-    print(f"  proc: {proc.name}")
+    print(f"  proc: {proc.name}"
+          + (f"  (channel {chan_override} / {color})" if chan_override else ""))
 
     # Resolve target epoch with fallback to base stem (e.g. bci2 -> bci)
     with open(mc / "epoch_locations.json") as f:
