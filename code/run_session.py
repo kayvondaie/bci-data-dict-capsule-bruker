@@ -236,6 +236,60 @@ if "spont_pre" in epoch_locations:
         if src.exists():
             (spont_dir / fname).symlink_to(src)
 
+# Build suite2p_photostim[N]/ slices for any photostim epochs in this session.
+# data_dict_create_module_bruker.py:178 looks for suite2p_photostim/ to
+# populate data['photostim'] via create_photostim_Fstim(); without these
+# directories the photostim block silently produces nothing.
+session_json_fp = raw / "session.json"
+if session_json_fp.exists():
+    with open(session_json_fp) as jf:
+        session_meta = json.load(jf)
+    photostim_stems = [
+        ep["output_parameters"]["tiff_stem"]
+        for ep in session_meta.get("stimulus_epochs", [])
+        if "photostim" in ep.get("stimulus_name", "").lower()
+    ]
+    for i, ps_stem in enumerate(photostim_stems):
+        if ps_stem not in epoch_locations:
+            print(f"NOTE: photostim epoch {ps_stem!r} not in epoch_locations, skipping.")
+            continue
+        ps_start, ps_end = epoch_locations[ps_stem]
+        suffix = "" if i == 0 else str(i + 1)
+        ps_dir = POPHYS / f"suite2p_photostim{suffix}" / "plane0"
+        ps_dir.mkdir(parents=True, exist_ok=True)
+        ps_slice = slice(ps_start, ps_end + 1)
+        for fname in ["F", "Fneu"]:
+            src_path = extraction / f"{fname}.npy"
+            if src_path.exists():
+                arr = np.load(src_path)
+                np.save(ps_dir / f"{fname}.npy", arr[:, ps_slice])
+                del arr
+        # ROIs/ops are shared across all epochs (segmented once, non-photostim only).
+        for fname in ["stat.npy", "iscell.npy", "ops.npy"]:
+            src = extraction / fname
+            if src.exists() and not (ps_dir / fname).exists():
+                (ps_dir / fname).symlink_to(src)
+        # siHeader from the photostim TIFF (carries stimGroups/SLM metadata that
+        # create_photostim_Fstim reads to build stimPosition, stimDist, etc.).
+        ps_tifs = sorted(
+            n for n, (s, e) in trial_locations.items()
+            if n.startswith(f"{ps_stem}_") and s >= ps_start and e <= ps_end
+        )
+        if ps_tifs:
+            ps_first_tif = raw / "pophys" / ps_tifs[0]
+            ps_siHeader = extract_scanimage_metadata.extract_scanimage_metadata(
+                str(ps_first_tif)
+            )
+            ps_siHeader["siBase"] = {0: TARGET_STEM, 1: "", 2: ps_stem}
+            ps_siHeader["savefolders"] = {
+                0: TARGET_STEM, 1: "spont", 2: f"photostim{suffix}"
+            }
+            np.save(ps_dir / "siHeader.npy", ps_siHeader)
+        print(
+            f"Built suite2p_photostim{suffix}/ from epoch {ps_stem!r} "
+            f"({ps_end - ps_start + 1} frames)"
+        )
+
 print(f"Workspace ready at {WORKSPACE}")
 
 
