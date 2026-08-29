@@ -260,11 +260,7 @@ def process_session(subject: str, date: str, target_stem: str):
 #
 # Set HOURS_BACK or skip this cell to control how far back to look.
 
-<<<<<<< HEAD
 HOURS_BACK = 90
-=======
-HOURS_BACK = 30
->>>>>>> 01d92b0eea0d015f7939ab652185c7e7c2c97b84
 
 _token = os.environ.get("CODEOCEAN_TOKEN")
 _capsule_id = os.environ.get("CO_CAPSULE_ID")
